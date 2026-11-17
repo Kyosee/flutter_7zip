@@ -13,7 +13,9 @@ final DynamicLibrary _dylib = () {
   if (Platform.isMacOS || Platform.isIOS) {
     return DynamicLibrary.open('$_libName.framework/$_libName');
   }
-  if (Platform.isAndroid || Platform.isLinux) {
+  if (Platform.isAndroid ||
+      Platform.isLinux ||
+      Platform.operatingSystem == 'ohos') {
     return DynamicLibrary.open('lib$_libName.so');
   }
   if (Platform.isWindows) {
@@ -107,14 +109,17 @@ class SZArchive {
   /// Extract the file at the given [index] to a file at the given [path].
   void extractToFile(int index, String path) {
     var p = path.toNativeUtf8();
-    var file = File(path);
-    if (!file.existsSync()) {
-      file.createSync(recursive: true);
-    }
-    final status = _bindings.extractArchiveToFile(_archive, index, p.cast());
-    malloc.free(p);
-    if (status != ArchiveStatus.kArchiveOK) {
-      throw Exception('Failed to extract file to $path.');
+    try {
+      var file = File(path);
+      if (!file.existsSync()) {
+        file.createSync(recursive: true);
+      }
+      final status = _bindings.extractArchiveToFile(_archive, index, p.cast());
+      if (status != ArchiveStatus.kArchiveOK) {
+        throw Exception('Failed to extract file to $path.');
+      }
+    } finally {
+      malloc.free(p);
     }
   }
 
@@ -133,32 +138,46 @@ class SZArchive {
   }
 
   /// Extract the archive at the given [archivePath] to the given [outputPath].
-  /// 
+  ///
   /// The method is synchronous and will block the main thread.
   static void extract(String archivePath, String outputPath) {
     var archive = open(archivePath);
-    for (var i = 0; i < archive.numFiles; i++) {
-      var file = archive.getFile(i);
-      var outPath = outputPath + Platform.pathSeparator + file.name;
-      if (file.isDirectory) {
-        Directory(outPath).createSync(recursive: true);
-      } else {
-        archive.extractToFile(i, outPath);
+    try {
+      for (var i = 0; i < archive.numFiles; i++) {
+        var file = archive.getFile(i);
+        var outPath = outputPath + Platform.pathSeparator + file.name;
+        if (file.isDirectory) {
+          Directory(outPath).createSync(recursive: true);
+        } else {
+          archive.extractToFile(i, outPath);
+        }
       }
+    } finally {
+      archive.dispose();
     }
-    archive.dispose();
   }
 
   /// Extract the archive at the given [archivePath] to the given [outputPath] with [isolatesCount] isolates.
-  /// 
+  ///
   /// The method is asynchronous and will not block the main thread.
   static Future<void> extractIsolates(
     String archivePath,
     String outputPath,
     int isolatesCount,
   ) async {
+    if (isolatesCount <= 0) {
+      throw ArgumentError.value(
+          isolatesCount, 'isolatesCount', 'Must be positive');
+    }
     var archive = open(archivePath);
-    var total = archive.numFiles;
+    late final int total;
+    try {
+      total = archive.numFiles;
+    } finally {
+      archive.dispose();
+    }
+    if (total == 0) return;
+    if (isolatesCount > total) isolatesCount = total;
     var filesPerIsolate = total ~/ isolatesCount;
     var futures = <Future>[];
     for (var i = 0; i < isolatesCount; i++) {
@@ -182,16 +201,19 @@ class SZArchive {
   ) async {
     return Isolate.run(() {
       var archive = open(archivePath);
-      for (var i = start; i < end; i++) {
-        var file = archive.getFile(i);
-        var outPath = outputPath + Platform.pathSeparator + file.name;
-        if (file.isDirectory) {
-          Directory(outPath).createSync(recursive: true);
-        } else {
-          archive.extractToFile(i, outPath);
+      try {
+        for (var i = start; i < end; i++) {
+          var file = archive.getFile(i);
+          var outPath = outputPath + Platform.pathSeparator + file.name;
+          if (file.isDirectory) {
+            Directory(outPath).createSync(recursive: true);
+          } else {
+            archive.extractToFile(i, outPath);
+          }
         }
+      } finally {
+        archive.dispose();
       }
-      archive.dispose();
     });
   }
 }
@@ -199,14 +221,19 @@ class SZArchive {
 class ArchiveFile {
   /// Relative path to the archive.
   final String name;
+
   /// The size of the file.
   final int size;
+
   /// The CRC32 checksum of the file.
   final int crc32;
+
   /// The creation time of the file.
   final DateTime? createTime;
+
   /// The modification time of the file.
   final DateTime? modifyTime;
+
   /// Whether the file is a directory.
   final bool isDirectory;
 

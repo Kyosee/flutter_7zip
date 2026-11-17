@@ -2,6 +2,14 @@
 
 A flutter plugin to decompress 7z files.
 
+Extraction helpers close their archive handles on success and failure. Manual
+`SZArchive.open` users must still call `dispose` in a `finally` block. HarmonyOS
+applications must bundle `libflutter_7zip.so` from `src/`.
+
+Run `flutter test test/extraction_lifecycle_test.dart` with the native library
+on `PATH` (Windows) or `LD_LIBRARY_PATH` (Linux). The test uses the existing
+example archive and verifies success, output failures and handle release.
+
 ## Getting Started
 
 Add this to your package's pubspec.yaml file:
